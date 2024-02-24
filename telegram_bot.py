@@ -50,37 +50,39 @@ ru_step = {'year': 'год',
 
 # func to icrease or decrease anything in sessions by one
 def add_sub(chat_id, thing, sign):
-    if sign == '-' and sessions[chat_id]['services_dict'][thing] != 1:
-        sessions[chat_id]['services_dict'][thing] -= 1
-        return sessions[chat_id]['services_dict'][thing]
+    if sign == '-' and sessions[chat_id]['services_dict'][thing]['amount'] != 1:
+        sessions[chat_id]['services_dict'][thing]['amount'] -= 1
+        return sessions[chat_id]['services_dict'][thing]['amount']
     elif sign == '+':
-        sessions[chat_id]['services_dict'][thing] += 1
+        sessions[chat_id]['services_dict'][thing]['amount'] += 1
     else:
         return 1
-    return sessions[chat_id]['services_dict'][thing]
+    return sessions[chat_id]['services_dict'][thing]['amount']
 
 
-# time availiable to do service at date
-def time_availiable(date, order_time):
-    # there should be SQL request somehow checking if there enought spare time and equipment any employee have?
-    # that should return time interval availiable at this day
-    return 11.5, 18
+# # time availiable to do service at date
+# def time_availiable(date, order_time, services_dict):
+#     time_pool = db.get_time_availiable(date, order_time, services_dict)[0]
+#     # there should be SQL request somehow checking if there enought spare time and equipment any employee have?
+#     # that should return time interval availiable at this day
+#     return time_pool
 
 
 # price calc
 def total_price(chat_id):
     services_d = db.get_services(all=True)
     total_sum = 0
-    for service, amount in sessions[chat_id]['services_dict'].items():
-        total_sum += services_d[service]['price'] * amount
+    for service in sessions[chat_id]['services_dict']:
+        total_sum += services_d[service]['price'] * sessions[chat_id]['services_dict'][service]['amount']
     return total_sum
 
 
 def time_req(chat_id):
     services_d = db.get_services(all=True)
     t = 0
-    for service, amount in sessions[chat_id]['services_dict'].items():
-        t += services_d[service]['time'] * amount
+    for service in sessions[chat_id]['services_dict']:
+        # print(f"{services_d[service]['time']}  and amount is {sessions[chat_id]['services_dict'][service]['amount']}")
+        t += services_d[service]['time'] * sessions[chat_id]['services_dict'][service]['amount']
     hours_types = ('ов', '', 'а')
     if t == 1:
         h = ''
@@ -93,9 +95,9 @@ def time_req(chat_id):
 
 def current_services_list(chat_id):
     s_list = 'Ваш заказ:'
-    for service, amount in sessions[chat_id]['services_dict'].items():
+    for service in sessions[chat_id]['services_dict']:
         if service != 'Базовая цена':
-            s_list += f'\n{service} X {amount}'
+            s_list += f"\n{service} X {sessions[chat_id]['services_dict'][service]['amount']}"
     t = time_req(chat_id)
     s_list += f'\nДлительность: {t[0]} час{t[1]}'
     if 'date' in sessions[chat_id] and 'time' in sessions[chat_id]:
@@ -125,7 +127,12 @@ start_menu_keyb.add(InlineKeyboardButton('Заказать клининг', call
 start_menu_keyb.add(InlineKeyboardButton('Отзывы', callback_data='c;r;show'))
 start_menu_keyb.add(InlineKeyboardButton('Частые вопросы', callback_data='c;o;faq'))
 
-
+nav_keyb = InlineKeyboardMarkup()
+nav_keyb.add(InlineKeyboardButton('К комнатам/санузлам', callback_data='c;o;start'))
+nav_keyb.add(InlineKeyboardButton('К доп. услугам', callback_data='c;o;1'),
+             InlineKeyboardButton('К дате/времени', callback_data='c;o;2'))
+nav_keyb.add(InlineKeyboardButton('К адресу/телефону', callback_data='c;o;3'))
+nav_keyb.add(InlineKeyboardButton('Заказать', callback_data='c;o;5'))
 
 
 
@@ -177,6 +184,45 @@ def start(message):
     m = bot.send_message(message.chat.id, 'КлинниБогини приветствует вас', reply_markup=start_menu_keyb)
     sessions[message.chat.id]['last_bot_message'] = m.message_id
 
+# step 3 adr and tel handler
+@bot.message_handler(content_types=['text'])
+def tel_adr(message):
+    chat_id = message.chat.id
+    print(message.text)
+    new_text = current_services_list(chat_id) + '\n'
+    if chat_id in sessions:
+        if message.text.isdigit():
+            sessions[chat_id]['tel'] = message.text
+        else:
+            sessions[chat_id]['adress'] = message.text
+        if 'adress' in sessions[chat_id] and 'tel' in sessions[chat_id]:
+            new_text += f"\n Ваш адрес:{sessions[chat_id]['adress']} \nВаш телефон: {sessions[chat_id]['tel']}\n!Проверьте правильность введенных данных!"
+            keyb = InlineKeyboardMarkup()
+            keyb.add(InlineKeyboardButton('Подтвердить', callback_data='c;o;4'))
+            bot.edit_message_text(new_text,
+                                  chat_id,
+                                  sessions[chat_id]['last_bot_message'],
+                                  reply_markup=keyb
+                                  )
+        elif 'adress' in sessions[message.chat.id]:
+            new_text += f"\nВаш адрес:{sessions[chat_id]['adress']} \nОтправьте ваш телефон(9 цифр) в сообщении (+375 ХХХХХХХХХ)"
+            bot.edit_message_text(new_text,
+                                  chat_id,
+                                  sessions[chat_id]['last_bot_message'],
+                                  )
+        elif 'tel' in sessions[chat_id]:
+            new_text += f"\nВаш телефон: {sessions[message.chat.id]['tel']} \nОтправьте ваш адрес в сообщении"
+            bot.edit_message_text(new_text,
+                                  chat_id,
+                                  sessions[chat_id]['last_bot_message'],
+                                  )
+        new_text += '\nЧтобы изменить адресс или телефон, отправьте его ещё раз'
+        bot.delete_message(chat_id, message.id)
+
+
+
+        new_text += '\n Отправьте ваш адрес и телефон(9 цифр) двумя отдельными сообщениями(телефон +375 ХХХХХХХХХ)'
+
 
 # main menu
 @bot.callback_query_handler(func=lambda call: call.data == 'c;main_menu')
@@ -195,7 +241,7 @@ def order_start(call):
     if 'services_dict' not in sessions[chat_id]:
         sessions[chat_id]['services_dict'] = {}
         sessions[chat_id]['services_dict']['Комната'],sessions[chat_id]['services_dict']['Санузел'], \
-        sessions[chat_id]['services_dict']['Базовая цена'] = 1, 1, 1
+        sessions[chat_id]['services_dict']['Базовая цена'] = {'amount': 1}, {'amount': 1}, {'amount': 1}
         keyb = main_calc_keyb_gen(1, 1)
     else:
         keyb = main_calc_keyb_gen(sessions[chat_id]['services_dict']['Комната'], sessions[chat_id]['services_dict']['Санузел'])
@@ -252,10 +298,10 @@ def services(call):
     elif ''.join(data.split(';')[:3]) == 'cos' and data.split(';')[4] == '0': # flag 5 is 'is_scaleable'
         service = data.split(';')[3]
         if service in sessions[chat_id]['services_dict']:
-            if sessions[chat_id]['services_dict'][service] == 1:
+            if sessions[chat_id]['services_dict'][service]['amount'] == 1:
                 sessions[chat_id]['services_dict'].pop(service)
         else:
-            sessions[chat_id]['services_dict'][service] = 1
+            sessions[chat_id]['services_dict'][service] = {'amount': 1}
         new_text = current_services_list(chat_id) + '\nЖелаете ли выбрать какие-либо дополнительные услуги?\n(Нажмите на услугу еще раз чтобы отказаться от неё)'
         bot.edit_message_text(chat_id=chat_id,
                               message_id=message_id,
@@ -289,7 +335,7 @@ def services(call):
                     if service in sessions[chat_id]['services_dict']:
                         sessions[chat_id]['services_dict'].pop(service)
                 else:
-                    sessions[chat_id]['services_dict'][service] = int(data.split(';')[5])
+                    sessions[chat_id]['services_dict'][service] = {'amount': int(data.split(';')[5])}
                 new_text = current_services_list(chat_id) + '\nЖелаете ли выбрать какие-либо дополнительные услуги?\n(Нажмите на услугу еще раз чтобы отказаться от неё)'
                 bot.edit_message_text(chat_id=chat_id,
                                       message_id=message_id,
@@ -311,6 +357,7 @@ def date_time_selection(call):
                           text=f"Выберите {ru_step[LSTEP[step]]}",
                           reply_markup=calendar)
 
+
 # step2: calendar and time handler
 @bot.callback_query_handler(func=DetailedTelegramCalendar.func())
 def cal(c):
@@ -325,30 +372,32 @@ def cal(c):
                               message_id,
                               reply_markup=key)
     elif result:
-        time_range = time_availiable(result, chat_id)
+        req_t = time_req(chat_id)
+        availiability_data = db.get_time_availiable('.'.join(str(result).split('-')), req_t[0], sessions[chat_id]['services_dict'])
+
         keyb = InlineKeyboardMarkup()
 
         # there is time availiable at this day
-        if time_range:
-            req_t = time_req(chat_id)
+        if availiability_data:
+            time_pool = availiability_data[0]
             new_text = f"Вы выбрали дату {result} \nДлительность: {req_t[0]} час{req_t[1]} \nВыберите время которое вам подходит"
             sessions[chat_id]['date'] = '.'.join(str(result).split('-'))
             # time keyb gen
             keyb.row_width = 4
             btn_list = []
-            for d_time in range(int(time_range[0]*2), int(time_range[1]*2+1)):
+            for d_time in time_pool:
                 if d_time % 2 == 0:
                     t = str(d_time//2) + ':00'
                 else:
                     t = str(d_time//2) + ':30'
-                btn_list.append(InlineKeyboardButton(f'{t}', callback_data=f'c;o;t;{t}'))
+                btn_list.append(InlineKeyboardButton(f'{t}', callback_data=f'c;o;3;{t}'))
 
             for i in range(4-len(btn_list) % 4):
                 btn_list.append(InlineKeyboardButton(f' ', callback_data='text_btn'))
             for i in range(len(btn_list)//4):
                 keyb.add(*btn_list[i*4:i*4+4])
 
-        # there is no time availiable at this day
+        # there is no time availiable at this day or not enough equip
         else:
             new_text = f"К сожалению в этот день все наши специалисты заняты, выберите другую дату, пожалуйста \n "
             keyb.add(InlineKeyboardButton('Выбрать другой день', callback_data='c;o;2'))
@@ -357,27 +406,38 @@ def cal(c):
                               message_id,
                               reply_markup=keyb)
 
-# step 3
-@bot.callback_query_handler(func=lambda call: call.data[:5] == 'c;o;t')
-def time_recording(call):
+# step 3 adress and tel collection
+@bot.callback_query_handler(func=lambda call: call.data[:5] == 'c;o;3')
+def adress_and_phone(call):
     chat_id, message_id, data = sim_parse(call)
     # time recording
-    sessions[chat_id]['time'] = call.data.split(';')[3]
+    if len(data.split(';')) == 4:
+        sessions[chat_id]['time'] = data.split(';')[3]
+    if 'tel' in sessions[chat_id]:
+        sessions[chat_id].pop('tel')
+    if 'adress' in sessions[chat_id]:
+        sessions[chat_id].pop('adress')
     new_text = current_services_list(chat_id)
+    new_text += '\n Отправьте ваш адрес и телефон(9 цифр) двумя отдельными сообщениями(телефон +375 ХХХХХХХХХ)'
     bot.edit_message_text(new_text,
                           chat_id,
                           message_id)
     # Z-z-z
 
 
+# step 4 confirmation
+@bot.callback_query_handler(func=lambda call: call.data[:5] == 'c;o;4')
+def confirmation(call):
+    chat_id, message_id, data = sim_parse(call)
+    new_text = current_services_list(chat_id)
+    new_text += f"\n Ваш адрес:{sessions[chat_id]['adress']} \nВаш телефон: {sessions[chat_id]['tel']}\nПроверьте ваш заказ и нажмите закзать для начала обработки заказа"
 
+    bot.edit_message_text(new_text,
+                          chat_id,
+                          message_id,
+                          reply_markup=nav_keyb)
 
-    # sessions[call.message.chat.id]['n_rooms'], sessions[call.message.chat.id]['n_baths'] = 0, 0
-    # main_calc_keyb = main_calc_keyb_gen(0, 0)
-    # bot.edit_message_text(chat_id=call.message.chat.id,
-    #                       message_id=sessions[call.message.chat.id]['last_bot_message'],
-    #                       text=f'Выберите количество комнат и санузлов чтобы мы могли рассчитать приблизительную стоимость. \n',
-    #                       reply_markup=main_calc_keyb)
+# step 5 order_sending
 
 
 @bot.callback_query_handler(func=lambda call: True)
