@@ -15,8 +15,11 @@ with open('config.json', 'r') as file:
     content = json.load(file)
     token = content['tg_token']
     employee_chat_id = content['employee_chat_id']
-    print('bot token: ' + token)
-    print('employee_chat_id: ' + employee_chat_id)
+    delay = content['order_send_delay']
+    if __name__ == '__main__':
+        print('bot token: ' + token)
+        print('employee_chat_id: ' + employee_chat_id)
+
 
 bot = telebot.TeleBot(token)
 
@@ -94,15 +97,18 @@ def time_req(chat_id):
 
 
 def current_services_list(chat_id):
-    s_list = 'Ваш заказ:'
+    s_list = 'Ваш заказ:\n'
     for service in sessions[chat_id]['services_dict']:
         if service != 'Базовая цена':
             s_list += f"\n{service} X {sessions[chat_id]['services_dict'][service]['amount']}"
+    s_list += f'\n\nИтого {total_price(chat_id)} руб.'
     t = time_req(chat_id)
     s_list += f'\nДлительность: {t[0]} час{t[1]}'
     if 'date' in sessions[chat_id] and 'time' in sessions[chat_id]:
         s_list += f"\nДата и время: {sessions[chat_id]['date']} {sessions[chat_id]['time']} "
-    s_list += f'\nИтого {total_price(chat_id)} руб.'
+    if 'tel' in sessions[chat_id] and 'adress' in sessions[chat_id]:
+        s_list += f"\nВаш адрес: {sessions[chat_id]['adress']} \nВаш телефон: {sessions[chat_id]['tel']}"
+
     return s_list
 
 
@@ -114,6 +120,18 @@ def sim_parse(call):            # chat_id, message_id, data = sim_parse(call)
 def adv_parse(call):            # chat_id, message_id, data, text, keyb = adv_parse(call)
     return call.message.chat.id, call.message.id, call.data, call.message.text, call.message.reply_markup
 
+def send_order(client_chat_id: int, data:dict):
+    text, services_list = '', ''
+    pending_orders[client_chat_id] = sessions[client_chat_id]
+    pending_orders[client_chat_id]['sent'] = False
+    total_sum = 0
+    text = f'Заказ клиента: {client_chat_id}\n'
+    text += current_services_list(client_chat_id)
+    i_kb = InlineKeyboardMarkup()
+    i_kb.add(InlineKeyboardButton('Подтвердить', callback_data=f'e;apr;{client_chat_id}'))
+             # InlineKeyboardButton('X Неправильные данные', callback_data=f'adm;deco;{client_chat_type}{str(client_chat_id)}'))
+    pending_orders[client_chat_id]['text'] = text
+    pending_orders[client_chat_id]['keyb'] = i_kb
 ### end of static functions section
 
 
@@ -124,8 +142,8 @@ def adv_parse(call):            # chat_id, message_id, data, text, keyb = adv_pa
 
 start_menu_keyb = InlineKeyboardMarkup()
 start_menu_keyb.add(InlineKeyboardButton('Заказать клининг', callback_data='c;o;start'))
-start_menu_keyb.add(InlineKeyboardButton('Отзывы', callback_data='c;r;show'))
-start_menu_keyb.add(InlineKeyboardButton('Частые вопросы', callback_data='c;o;faq'))
+# start_menu_keyb.add(InlineKeyboardButton('Отзывы', callback_data='c;r;show'))
+start_menu_keyb.add(InlineKeyboardButton('Блог и ответы на вопросы', url='https://cleanny.by/blog/'))
 
 nav_keyb = InlineKeyboardMarkup()
 nav_keyb.add(InlineKeyboardButton('К комнатам/санузлам', callback_data='c;o;start'))
@@ -137,7 +155,8 @@ nav_keyb.add(InlineKeyboardButton('Заказать', callback_data='c;o;5'))
 
 
 
-
+step_3_keyb = InlineKeyboardMarkup()
+step_3_keyb.add(InlineKeyboardButton('Подтвердить', callback_data='c;o;4'))
 
 def main_calc_keyb_gen(n_rooms, n_baths):
     keyb = InlineKeyboardMarkup()
@@ -181,8 +200,22 @@ def services_keyb_gen():
 @bot.message_handler(commands=['start'])
 def start(message):
     sessions[message.chat.id] = {}
+    sessions[message.chat.id]['read_review'] = False
     m = bot.send_message(message.chat.id, 'КлинниБогини приветствует вас', reply_markup=start_menu_keyb)
     sessions[message.chat.id]['last_bot_message'] = m.message_id
+
+
+@bot.message_handler(func=lambda message: sessions[message.chat.id]['read_review'])
+def review_read(message):
+    new_text = f'\n\nВаше сообщение: {message.text}\n\nЕсли хотите изменить текст сообщения, отправьте его заново'
+    keyb = InlineKeyboardMarkup()
+    keyb.add(InlineKeyboardButton('Отправить', callback_data='c;r;send'))
+    bot.edit_message_text(new_text,
+                          message.chat.id,
+                          sessions[message.chat.id]['last_bot_message'],
+                          reply_markup=keyb)
+    bot.delete_message(message.chat.id,
+                       message.id)
 
 # step 3 adr and tel handler
 @bot.message_handler(content_types=['text'])
@@ -196,13 +229,11 @@ def tel_adr(message):
         else:
             sessions[chat_id]['adress'] = message.text
         if 'adress' in sessions[chat_id] and 'tel' in sessions[chat_id]:
-            new_text += f"\n Ваш адрес:{sessions[chat_id]['adress']} \nВаш телефон: {sessions[chat_id]['tel']}\n!Проверьте правильность введенных данных!"
-            keyb = InlineKeyboardMarkup()
-            keyb.add(InlineKeyboardButton('Подтвердить', callback_data='c;o;4'))
+            new_text += f"\nВаш адрес:{sessions[chat_id]['adress']} \nВаш телефон: {sessions[chat_id]['tel']}\n!Проверьте правильность введенных данных!"
             bot.edit_message_text(new_text,
                                   chat_id,
                                   sessions[chat_id]['last_bot_message'],
-                                  reply_markup=keyb
+                                  reply_markup=step_3_keyb
                                   )
         elif 'adress' in sessions[message.chat.id]:
             new_text += f"\nВаш адрес:{sessions[chat_id]['adress']} \nОтправьте ваш телефон(9 цифр) в сообщении (+375 ХХХХХХХХХ)"
@@ -221,16 +252,20 @@ def tel_adr(message):
 
 
 
-        new_text += '\n Отправьте ваш адрес и телефон(9 цифр) двумя отдельными сообщениями(телефон +375 ХХХХХХХХХ)'
+        new_text += '\nОтправьте ваш адрес и телефон(9 цифр) двумя отдельными сообщениями(телефон +375 ХХХХХХХХХ)'
 
 
 # main menu
 @bot.callback_query_handler(func=lambda call: call.data == 'c;main_menu')
 def call_start(call):
+    bot.answer_callback_query(callback_query_id=call.id)
     bot.edit_message_text(chat_id=call.message.chat.id,
                           message_id=sessions[call.message.chat.id]['last_bot_message'],
                           text='КлинниБогини приветствует вас',
                           reply_markup=start_menu_keyb)
+    m = sessions[call.message.chat.id]['last_bot_message']
+    sessions[call.message.chat.id] = {'last_bot_message': m}
+    sessions[call.message.chat.id]['read_review'] = False
 
 
 # step 0: rooms and baths choice
@@ -244,7 +279,7 @@ def order_start(call):
         sessions[chat_id]['services_dict']['Базовая цена'] = {'amount': 1}, {'amount': 1}, {'amount': 1}
         keyb = main_calc_keyb_gen(1, 1)
     else:
-        keyb = main_calc_keyb_gen(sessions[chat_id]['services_dict']['Комната'], sessions[chat_id]['services_dict']['Санузел'])
+        keyb = main_calc_keyb_gen(sessions[chat_id]['services_dict']['Комната']['amount'], sessions[chat_id]['services_dict']['Санузел']['amount'])
     t_price = total_price(chat_id)
     bot.edit_message_text(chat_id=chat_id,
                           message_id=message_id,
@@ -345,8 +380,9 @@ def services(call):
 
 
 # step 2: date and time selection
-@bot.callback_query_handler(func=lambda call: call.data == 'c;o;2' )
+@bot.callback_query_handler(func=lambda call: call.data == 'c;o;2')
 def date_time_selection(call):
+    bot.answer_callback_query(callback_query_id=call.id)
     chat_id, message_id, data, text, keyb = adv_parse(call)
     bot.answer_callback_query(callback_query_id=call.id)
     calendar, step = DetailedTelegramCalendar(min_date=datetime.date.today(), # here should be closest date where employees free
@@ -361,6 +397,7 @@ def date_time_selection(call):
 # step2: calendar and time handler
 @bot.callback_query_handler(func=DetailedTelegramCalendar.func())
 def cal(c):
+    bot.answer_callback_query(callback_query_id=c.id)
     chat_id, message_id, data, text, keyb = adv_parse(c)
     result, key, step = DetailedTelegramCalendar(locale='ru',
                                                  min_date=datetime.date.today(),
@@ -373,8 +410,8 @@ def cal(c):
                               reply_markup=key)
     elif result:
         req_t = time_req(chat_id)
+        sessions[chat_id]['duration'] = req_t[0]
         availiability_data = db.get_time_availiable('.'.join(str(result).split('-')), req_t[0], sessions[chat_id]['services_dict'])
-
         keyb = InlineKeyboardMarkup()
 
         # there is time availiable at this day
@@ -409,42 +446,141 @@ def cal(c):
 # step 3 adress and tel collection
 @bot.callback_query_handler(func=lambda call: call.data[:5] == 'c;o;3')
 def adress_and_phone(call):
+    bot.answer_callback_query(callback_query_id=call.id)
     chat_id, message_id, data = sim_parse(call)
     # time recording
     if len(data.split(';')) == 4:
         sessions[chat_id]['time'] = data.split(';')[3]
-    if 'tel' in sessions[chat_id]:
-        sessions[chat_id].pop('tel')
-    if 'adress' in sessions[chat_id]:
-        sessions[chat_id].pop('adress')
     new_text = current_services_list(chat_id)
-    new_text += '\n Отправьте ваш адрес и телефон(9 цифр) двумя отдельными сообщениями(телефон +375 ХХХХХХХХХ)'
-    bot.edit_message_text(new_text,
-                          chat_id,
-                          message_id)
+    if 'tel' in sessions[chat_id] and 'adress' in sessions[chat_id]:
+        new_text += '\nЧтобы изменить адрес или телефон отправьте ваш адрес или телефон(9 цифр +375 ХХХХХХХХХ)'
+        bot.edit_message_text(new_text,
+                              chat_id,
+                              message_id,
+                              reply_markup=step_3_keyb)
+    else:
+        new_text += '\nОтправьте ваш адрес и телефон(9 цифр) двумя отдельными сообщениями(телефон +375 ХХХХХХХХХ)'
+        bot.edit_message_text(new_text,
+                              chat_id,
+                              message_id)
     # Z-z-z
 
 
 # step 4 confirmation
 @bot.callback_query_handler(func=lambda call: call.data[:5] == 'c;o;4')
 def confirmation(call):
+    bot.answer_callback_query(callback_query_id=call.id)
     chat_id, message_id, data = sim_parse(call)
     new_text = current_services_list(chat_id)
-    new_text += f"\n Ваш адрес:{sessions[chat_id]['adress']} \nВаш телефон: {sessions[chat_id]['tel']}\nПроверьте ваш заказ и нажмите закзать для начала обработки заказа"
+    new_text += f"\n\nПроверьте ваш заказ и нажмите заказать для начала обработки заказа"
 
     bot.edit_message_text(new_text,
                           chat_id,
                           message_id,
                           reply_markup=nav_keyb)
 
+
 # step 5 order_sending
+@bot.callback_query_handler(func=lambda call: call.data[:5] == 'c;o;5')
+def o_send(call):
+    bot.answer_callback_query(callback_query_id=call.id)
+    chat_id, message_id, data = sim_parse(call)
+    new_text = 'заказ принят'
+    new_text = current_services_list(chat_id)
+    new_text += f"\n\nЕсли что-то не так, можете отменить заказ в течении {delay/60} минут"
+    send_order(chat_id, sessions[chat_id])
+    bot.edit_message_text(new_text,
+                          chat_id,
+                          message_id)
+
+
+# employee takes order
+@bot.callback_query_handler(func=lambda call: 'e;apr' in call.data)
+def e_aproove(call):
+    bot.answer_callback_query(callback_query_id=call.id)
+    chat_id, message_id, data, text, keyb = adv_parse(call)
+    print('who pressed:  ' + str(call.from_user.id))
+    print(text.split('\n')[0].split(': ')[-1].strip())
+    client_tg_id = int(text.split('\n')[0].split(': ')[-1].strip())
+    availiable_employees = db.get_availiable_employees(1,
+                                    sessions[client_tg_id]['date'],
+                                    sessions[client_tg_id]['duration'],
+                                    )[1]
+    e_id, e_name = db.get_employee_id(call.from_user.id) # employee id and name
+    if e_id in availiable_employees.keys():
+        keyb = InlineKeyboardMarkup()
+        keyb.add(InlineKeyboardButton("Заказ выполнен",
+                                      callback_data='e;done'))
+        bot.edit_message_text(text+f'\n\nЗаказ принят\nКлинер: {e_name}',
+                              chat_id,
+                              message_id,
+                              reply_markup=keyb)
+        sessions[client_tg_id]['employee'] = call.from_user.id
+        sessions[client_tg_id]['total_sum'] = total_price(client_tg_id)
+        db.insert_order(client_tg_id, sessions[client_tg_id])
+        new_text = 'Ваш заказ принят\n' + '\n'.join(pending_orders[client_tg_id]['text'].split('\n')[1:]) +\
+                   f"\n\nВ назнаеченное время к вам приедет наш специалист: {e_name.split(' ')[0]}"
+        bot.edit_message_text(new_text,
+                              client_tg_id,
+                              sessions[client_tg_id]['last_bot_message'])
+        pending_orders.pop(client_tg_id)
+
+# employee finished job
+@bot.callback_query_handler(func=lambda call: 'e;done' == call.data)
+def e_done(call):
+    bot.answer_callback_query(callback_query_id=call.id)
+    chat_id, message_id, data, text, keyb = adv_parse(call)
+    client_tg_id = int(text.split('\n')[0].split(': ')[-1].strip())
+    keyb = InlineKeyboardMarkup()
+    keyb.add(InlineKeyboardButton('Главное меню', callback_data='c;main_menu'))
+    keyb.add(InlineKeyboardButton('Оставить отзыв', callback_data='c;r;poz'))
+    keyb.add(InlineKeyboardButton('Пожаловаться', callback_data='c;r;neg'))
+    bot.edit_message_text("Поделитесь вашим мнением о нас",
+                          client_tg_id,
+                          sessions[client_tg_id]['last_bot_message'],
+                          reply_markup=keyb)
+
+
+# start review
+@bot.callback_query_handler(func=lambda call: call.data in ['c;r;poz', 'c;r;neg'])
+def e_done(call):
+    bot.answer_callback_query(callback_query_id=call.id)
+    chat_id, message_id, data, text, keyb = adv_parse(call)
+    sessions[chat_id]['read_review'] = True
+    if 'poz' in data:
+        new_text = 'Отаправьте ваш отзыв в сообщении'
+    else:
+        new_text = 'Отаправьте вашу жалобу в сообщении'
+    bot.edit_message_text(new_text,
+                          chat_id,
+                          message_id)
+
+
+
+
+# review send
+@bot.callback_query_handler(func=lambda call: call.data == 'c;r;send')
+def review_send(call):
+    chat_id, message_id, data, text, keyb = adv_parse(call)
+    bot.answer_callback_query(callback_query_id=call.id)
+    # db.insert_review Z-z-z
+    sessions[chat_id]['read_review'] = False
+    keyb = InlineKeyboardMarkup()
+    keyb.add(InlineKeyboardButton('В главное меню', callback_data='c;main_menu'))
+    new_text = 'Спасибо что выбрали нас'
+    bot.edit_message_text(new_text,
+                          chat_id,
+                          message_id,
+                          reply_markup=keyb)
 
 
 @bot.callback_query_handler(func=lambda call: True)
 def unknown_call(call):
-    print('unknown call:  '+call.data)
+
+    bot.answer_callback_query(callback_query_id=call.id)
+    print('unknown call:  ' + call.data)
 
 
-print("\nready")
-
-bot.infinity_polling()
+if __name__ == "__main__":
+    print("\nready")
+    bot.infinity_polling()

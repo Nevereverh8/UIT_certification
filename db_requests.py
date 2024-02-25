@@ -81,10 +81,11 @@ if __name__ == '__main__':
                     ''')
         Storage_insert = '''INSERT INTO Storage (equip_id, amount, expire_date) VALUES (?,?,?)'''
         storage = [
-            [1, 2, 0],
-            [2, 100, 0],
-            [3, 10000, 1],
-            [4, 5000, 1],
+            [1, 2, ''],
+            [2, 100, ''],
+            [3, 5000, '16.09.2024'],
+            [3, 10000, '05.03.2025'],
+            [4, 5000, '05.03.2025'],
         ]
         con.executemany(Storage_insert, storage)
 
@@ -180,8 +181,7 @@ if __name__ == '__main__':
             [3, 100, 1],
             [3, 100, 2],
             [3, 100, 3],
-            [5, 3, 5],
-            [5, 2, 5],
+            [5, 1, 9]
         ]
         con.executemany(service_req_insert, service_reqs)
 
@@ -216,19 +216,44 @@ class DataBase:
                                        }
             return services_dict
 
-    def get_storage(self):
+    def get_columns(self, name: str) -> list:
+        """
+        get all column names
+        :param name: table name as string, as example 'Goods'
+        """
+        with self.db as con:
+            result = con.execute(f'''select * from pragma_table_info('{name}')''').fetchall()
+            return [i[1] for i in result]
+
+    def get_storage(self, exp=False, names=False):
         """
         Returns dict of items_names and amount {name: price, ...}
         """
         with self.db as con:
-            items = con.execute(f'''
-                                                SELECT equip_id, SUM(amount) FROM Storage
-                                                GROUP BY equip_id
-                                                ''').fetchall()
-            dict_of_storage = {}
+            exp_check = ''
+            if exp:
+                exp_check = ', expire_date'
+            if names:
+                items = con.execute(f'''
+                                    SELECT name, SUM(amount){exp_check}, units FROM Storage
+                                    JOIN Equip ON Equip.id = Storage.equip_id
+                                    GROUP BY name{exp_check}
+                                    ''').fetchall()
+                return items
+            else:
+
+                items = con.execute(f'''
+                                                    SELECT equip_id, SUM(amount){exp_check} FROM Storage
+                                                    GROUP BY equip_id
+                                                    ''').fetchall()
+                dict_of_storage = {}
             for i in items:
                 dict_of_storage[i[0]] = i[1]
             return dict_of_storage
+
+    def get_table(self,name):
+        with self.db as con:
+            return con.execute(f'''SELECT * FROM {name}''').fetchall()
 
     def get_equip_req(self, services_dict, date):
         req_equip_dict = {}    # db.get_equip_req({"Базовая цена":1, "Комната":1, "Санузел": 1})
@@ -254,12 +279,21 @@ class DataBase:
             print(storage)
             if datetime.date(int(date.split('.')[0]), int(date.split('.')[1]), int(date.split('.')[2])) <= datetime.date.today() + relativedelta(weeks=1):
                 for key in req_equip_dict:
-                    if req_equip_dict[key] in storage:
+                    print('req_equip_dict:    ', req_equip_dict)
+                    print('storage:    ', storage)
+                    if key in storage:
                         if req_equip_dict[key] > storage[key]:
+                            print('none 1')
                             return None
                     else:
+                        print('none 2')
                         return None
+
+                    print(req_equip_dict)
+                    return req_equip_dict
+
             else:
+                print(req_equip_dict)
                 return req_equip_dict
 
     def get_schedule(self, date, employee_id):
@@ -279,17 +313,20 @@ class DataBase:
             if n_employees == 1:
                 for e_id in e_ids:
                     time_limit = 10
-                    time_pool = [i for i in range(18, 37)]
+                    min_time = 18
+                    if str(datetime.date.today()).replace('-','.') == date:
+                        min_time = int((int(str(datetime.datetime.now().time()).split(':')[0]) + 1.5 + int(int(str(datetime.datetime.now().time()).split(':')[1]) > 30))*2)
+                    time_pool = [i for i in range(min_time, 37)]
                     schedule = self.get_schedule(date, e_id[0])
                     for order in schedule:  # order[0] is time ;   order[1] is time-required
                         time_limit -= order[1]
                         t = int(order[0].split(':')[0]) + int(order[0].split(':')[1] == '30') * 0.5
                         for i in range(int(t*2), int(2*(t+order[1]))):
-                            time_pool.remove(i)
+                            if i in time_pool:
+                                time_pool.remove(i)
                     # if > 10 hours
                     if time_limit < order_time:
                         continue
-                    print(order_time)
                     for h in time_pool:
                         if h+order_time*2 <= 36:
                             if (h+int(order_time*2) not in time_pool) or (h+int(order_time) not in time_pool) or h + int(order_time*2) >= 48:
@@ -321,7 +358,7 @@ class DataBase:
         time_ranges = []
         with self.db as con:
             # number of employeers required
-            if order_time > 10:
+            if order_time > 100: # later
                 n_employees = order_time//10 + 1
                 t = order_time/n_employees
                 employees = self.get_availiable_employees(n_employees, date, t)
@@ -342,7 +379,9 @@ class DataBase:
                 return None
 
 
-    def insert_order(self, client_id: int, time_placed: str, admin_id: int, order_list: dict):
+    def insert_order(self, client_tg_id, order_info:dict):
+        # need to add 30 min to time req
+        order_info['duration'] += 0.5
         """
         Inserts order and order list(shopping cart) to the database.
         time_placed is "DD.MM.YYYY HH:MM".
@@ -352,42 +391,41 @@ class DataBase:
         :rtype: int
         """
         with self.db as con:
-            # add order with blank delivery time and total price
-            sql_insert_order = '''INSERT INTO Orders (client_id, time_placed, delivery_time,
-                                                      is_finished, is_aborted, admin_processed,
-                                                      total_price)
-                                  VALUES (?,?,?,?,?,?,?) '''
-            con.execute(sql_insert_order, [client_id, time_placed, ' ', 0, 0, admin_id, 0])
+            # select or add client
+            client_id = con.execute('''SELECT id FROM orders''').fetchone()[0]
+            if not client_id:
+                client_id = self.insert_client('', order_info['tel'], order_info['adress'], client_tg_id)
+            now = str(datetime.datetime.now())
+            current_datetime = now.split(' ')[0].replace('-', '.') + ' ' + now.split(' ')[1][:5]
+            # add order with blank client_id(if there is no such in db) and total price
+            print(client_id)
+            print(current_datetime)
+            print(order_info)
+            con.execute(f'''INSERT INTO Orders (client_id, time_placed,
+                                                      is_finished, is_aborted,
+                                                      total_price,
+                                                      time_required,
+                                                      date, time)
+                                  VALUES ({client_id},'{current_datetime}',0,0,{order_info['total_sum']},{order_info['duration']},'{order_info['date']}', '{order_info['time']}') ''')
+
             order_id = con.execute('SELECT max(id)  from Orders').fetchone()[0]
+            print(con.execute('SELECT * FROM Orders').fetchall())
 
-            # add cart into order list
-            sql_insert_order_list = '''INSERT INTO Order_lists (food_id, amount, order_id)
-                                  VALUES (?,?,?)'''
-            total_price = 0
-            for food, amount in order_list.items():
-                food_id = con.execute(f'''SELECT id FROM Food
-                                   WHERE name = '{food}' ''').fetchone()[0]
-                price = con.execute(f'''SELECT price FROM Food
-                               WHERE id = '{food_id}' ''').fetchone()[0]
-                total_price += price * amount
-                con.execute(sql_insert_order_list, [food_id, amount, order_id])
+            # insert services_lists (select form services where name in (serivces_dict.keys())
+            for key in order_info['services_dict']:
+                con.execute(f'''INSERT INTO Services_lists (order_id, service_id, count) 
+                                VALUES({order_id},{con.execute(f"SELECT id FROM Services WHERE name ='{key}'").fetchone()[0]}, {order_info['services_dict'][key]['amount']} )''')
 
-            # Update order with delivery time and tota price
-            sql_update_order = f'''UPDATE Orders
-                                  SET delivery_time = 30 + (SELECT MAX(cook_time) FROM Food
-                                                       WHERE id IN (SELECT food_id FROM Order_lists
-                                                                         WHERE order_id = '{order_id}'
-                                                                         )
-                                                            ),
-                                      total_price = {total_price}
-                                 WHERE id = {order_id}
-                                   '''
-            con.execute(sql_update_order)
+            # insert to Employees_lists (select max order_id), (select employee_id by employee_tg_id)
+            con.execute(f'''INSERT INTO Employees_lists (order_id, employee_id) 
+                                            VALUES({order_id}, {db.get_employee_id(order_info['employee'])[0]})''')
 
-            # return delivery time
-            return con.execute(f'''SELECT delivery_time FROM Orders 
-                           WHERE id = '{order_id}' 
-                           ''').fetchone()[0]
+
+    def get_employee_id(self, tg_id):
+        with self.db as con:
+            return con.execute(f'''SELECT id,name FROM Employees
+                                       WHERE tg_id = '{tg_id}'
+                                       ''').fetchone()
 
     def get_client(self, client_chat_id: int):
         """
@@ -408,7 +446,7 @@ class DataBase:
             else:
                 return None
 
-    def insert_client(self, name: str, tel: int, adress: str, chat_id: int):
+    def insert_client(self, tg_nickname: str, tel: int, adress: str, chat_id: int):
         """
         If client in database - retruns id, if not - adds and return id
 
@@ -416,15 +454,23 @@ class DataBase:
         :rtype: int
         """
         with self.db as con:
+            client_args = {'tg_nickname': tg_nickname,
+                           'tel': tel,
+                           'adress:': adress,
+                           'chat_id': chat_id}
             a = con.execute(f'''
                                    SELECT * from Clients
                                    WHERE chat_id = {chat_id}
                     ''').fetchone()
-            if a:
+            if a == client_args:
                 client_id = a[0]
+            elif a:
+                for param, client_arg, db_val in client_args.items(), a:
+                    if client_arg != db_val:
+                        self.update_cell('Clients', a[0], param, client_arg)
             else:
                 con.execute(f'''INSERT INTO Clients (name, tel, adress, chat_id)
-                                  VALUES ('{name}', {tel}, '{adress}', {chat_id}) ''')
+                                  VALUES ('{tg_nickname}', {tel}, '{adress}', {chat_id}) ''')
                 client_id = con.execute('''SELECT max(id) FROM Clients''').fetchone()[0]
             return client_id
 
