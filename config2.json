@@ -1,0 +1,8 @@
+{
+  "db_path": "deitabeiza.db",
+  "tg_token": "",
+  "google_spreadshit": " ",
+  "order_send_delay": 15,
+  "admin_tg_ids": "",
+  "employee_chat_id": ""
+}

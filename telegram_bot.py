@@ -187,7 +187,7 @@ def services_keyb_gen():
                                                    callback_data=f"c;o;s;{services[2*i]};{services_dict[services[2*i]]['is_scaleable']}"))
 
     services_keyb.add(InlineKeyboardButton('Продолжить', callback_data='c;o;2'),
-             InlineKeyboardButton('Назад', callback_data='c;o:start'))
+             InlineKeyboardButton('Назад', callback_data='c;o;start'))
     return services_keyb
 
 ### end of static keyboards and keygens section
@@ -199,15 +199,16 @@ def services_keyb_gen():
 # start main menu
 @bot.message_handler(commands=['start'])
 def start(message):
-    sessions[message.chat.id] = {}
-    sessions[message.chat.id]['read_review'] = False
     m = bot.send_message(message.chat.id, 'КлинниБогини приветствует вас', reply_markup=start_menu_keyb)
-    sessions[message.chat.id]['last_bot_message'] = m.message_id
+    sessions[message.chat.id] = {'last_bot_message': m.message_id}
+    sessions[message.chat.id]['read_review'] = False
 
 
+# review message handler
 @bot.message_handler(func=lambda message: sessions[message.chat.id]['read_review'])
 def review_read(message):
     new_text = f'\n\nВаше сообщение: {message.text}\n\nЕсли хотите изменить текст сообщения, отправьте его заново'
+    sessions[message.chat.id]['review_text'] = message.text
     keyb = InlineKeyboardMarkup()
     keyb.add(InlineKeyboardButton('Отправить', callback_data='c;r;send'))
     bot.edit_message_text(new_text,
@@ -217,11 +218,11 @@ def review_read(message):
     bot.delete_message(message.chat.id,
                        message.id)
 
+
 # step 3 adr and tel handler
 @bot.message_handler(content_types=['text'])
 def tel_adr(message):
     chat_id = message.chat.id
-    print(message.text)
     new_text = current_services_list(chat_id) + '\n'
     if chat_id in sessions:
         if message.text.isdigit():
@@ -259,17 +260,33 @@ def tel_adr(message):
 @bot.callback_query_handler(func=lambda call: call.data == 'c;main_menu')
 def call_start(call):
     bot.answer_callback_query(callback_query_id=call.id)
-    bot.edit_message_text(chat_id=call.message.chat.id,
-                          message_id=sessions[call.message.chat.id]['last_bot_message'],
-                          text='КлинниБогини приветствует вас',
-                          reply_markup=start_menu_keyb)
-    m = sessions[call.message.chat.id]['last_bot_message']
+    m = call.message.id
     sessions[call.message.chat.id] = {'last_bot_message': m}
     sessions[call.message.chat.id]['read_review'] = False
+    if call.message.text != 'КлинниБогини приветствует вас':
+        bot.delete_message(chat_id=call.message.chat.id,
+                           message_id=call.message.id)
+        m = bot.send_message(chat_id=call.message.chat.id,
+                         text='КлинниБогини приветствует вас',
+                         reply_markup=start_menu_keyb)
+        sessions[call.message.chat.id] = {'last_bot_message': m.message_id}
+        sessions[call.message.chat.id]['read_review'] = False
+    else:
+        order_start(call)
+
+
+def unbreakable(func):
+    def wrapper(*args,**kwargs):
+        if args[0].message.chat.id not in sessions and args[0].data.split(';')[0] != 'e':
+            call_start(args[0])
+        else:
+            return func(args[0])
+    return wrapper
 
 
 # step 0: rooms and baths choice
 @bot.callback_query_handler(func=lambda call: call.data == 'c;o;start')
+@unbreakable
 def order_start(call):
     bot.answer_callback_query(callback_query_id=call.id)
     chat_id, message_id, data = sim_parse(call)
@@ -289,7 +306,9 @@ def order_start(call):
 
 
 # step 0 calc buttons
+
 @bot.callback_query_handler(func=lambda call: call.data in ('c;o;r;+', 'c;o;b;+', 'c;o;r;-', 'c;o;b;-',))
+@unbreakable
 def order_main_add_sub(call):
     bot.answer_callback_query(callback_query_id=call.id)
     chat_id, message_id, data, text, keyb = adv_parse(call)
@@ -314,10 +333,10 @@ def order_main_add_sub(call):
 
 # step 1: additional services
 @bot.callback_query_handler(func=lambda call: call.data == 'c;o;1' or ''.join(call.data.split(';')[:3]) == 'cos')
+@unbreakable
 def services(call):
     bot.answer_callback_query(callback_query_id=call.id)
     chat_id, message_id, data, text, keyb = adv_parse(call)
-    print(data)
     services_d = db.get_services()
     # main service menu
     if data == 'c;o;1':
@@ -381,6 +400,7 @@ def services(call):
 
 # step 2: date and time selection
 @bot.callback_query_handler(func=lambda call: call.data == 'c;o;2')
+@unbreakable
 def date_time_selection(call):
     bot.answer_callback_query(callback_query_id=call.id)
     chat_id, message_id, data, text, keyb = adv_parse(call)
@@ -396,6 +416,7 @@ def date_time_selection(call):
 
 # step2: calendar and time handler
 @bot.callback_query_handler(func=DetailedTelegramCalendar.func())
+@unbreakable
 def cal(c):
     bot.answer_callback_query(callback_query_id=c.id)
     chat_id, message_id, data, text, keyb = adv_parse(c)
@@ -445,6 +466,7 @@ def cal(c):
 
 # step 3 adress and tel collection
 @bot.callback_query_handler(func=lambda call: call.data[:5] == 'c;o;3')
+@unbreakable
 def adress_and_phone(call):
     bot.answer_callback_query(callback_query_id=call.id)
     chat_id, message_id, data = sim_parse(call)
@@ -468,6 +490,7 @@ def adress_and_phone(call):
 
 # step 4 confirmation
 @bot.callback_query_handler(func=lambda call: call.data[:5] == 'c;o;4')
+@unbreakable
 def confirmation(call):
     bot.answer_callback_query(callback_query_id=call.id)
     chat_id, message_id, data = sim_parse(call)
@@ -482,25 +505,30 @@ def confirmation(call):
 
 # step 5 order_sending
 @bot.callback_query_handler(func=lambda call: call.data[:5] == 'c;o;5')
+@unbreakable
 def o_send(call):
     bot.answer_callback_query(callback_query_id=call.id)
     chat_id, message_id, data = sim_parse(call)
     new_text = 'заказ принят'
     new_text = current_services_list(chat_id)
     new_text += f"\n\nЕсли что-то не так, можете отменить заказ в течении {delay/60} минут"
+    keyb = InlineKeyboardMarkup()
+    keyb.add(InlineKeyboardButton('Отменить', callback_data='c;o;abort'))
     send_order(chat_id, sessions[chat_id])
     bot.edit_message_text(new_text,
                           chat_id,
-                          message_id)
+                          message_id,
+                          reply_markup=keyb)
 
 
 # employee takes order
 @bot.callback_query_handler(func=lambda call: 'e;apr' in call.data)
+@unbreakable
 def e_aproove(call):
     bot.answer_callback_query(callback_query_id=call.id)
     chat_id, message_id, data, text, keyb = adv_parse(call)
-    print('who pressed:  ' + str(call.from_user.id))
-    print(text.split('\n')[0].split(': ')[-1].strip())
+    # print('who pressed:  ' + str(call.from_user.id))
+    # print(text.split('\n')[0].split(': ')[-1].strip())
     client_tg_id = int(text.split('\n')[0].split(': ')[-1].strip())
     availiable_employees = db.get_availiable_employees(1,
                                     sessions[client_tg_id]['date'],
@@ -527,6 +555,7 @@ def e_aproove(call):
 
 # employee finished job
 @bot.callback_query_handler(func=lambda call: 'e;done' == call.data)
+@unbreakable
 def e_done(call):
     bot.answer_callback_query(callback_query_id=call.id)
     chat_id, message_id, data, text, keyb = adv_parse(call)
@@ -539,10 +568,14 @@ def e_done(call):
                           client_tg_id,
                           sessions[client_tg_id]['last_bot_message'],
                           reply_markup=keyb)
+    bot.edit_message_text(text+'Заказ выполнен',
+                          chat_id,
+                          message_id)
 
 
 # start review
 @bot.callback_query_handler(func=lambda call: call.data in ['c;r;poz', 'c;r;neg'])
+@unbreakable
 def e_done(call):
     bot.answer_callback_query(callback_query_id=call.id)
     chat_id, message_id, data, text, keyb = adv_parse(call)
@@ -560,14 +593,30 @@ def e_done(call):
 
 # review send
 @bot.callback_query_handler(func=lambda call: call.data == 'c;r;send')
+@unbreakable
 def review_send(call):
     chat_id, message_id, data, text, keyb = adv_parse(call)
     bot.answer_callback_query(callback_query_id=call.id)
-    # db.insert_review Z-z-z
+    db.insert_review(chat_id, sessions[chat_id]['review_text'], sessions[chat_id]['employee'])
     sessions[chat_id]['read_review'] = False
     keyb = InlineKeyboardMarkup()
     keyb.add(InlineKeyboardButton('В главное меню', callback_data='c;main_menu'))
     new_text = 'Спасибо что выбрали нас'
+    bot.edit_message_text(new_text,
+                          chat_id,
+                          message_id,
+                          reply_markup=keyb)
+
+# review send
+@bot.callback_query_handler(func=lambda call: call.data == 'c;o;abort')
+@unbreakable
+def abort(call):
+    bot.answer_callback_query(callback_query_id=call.id)
+    chat_id, message_id, data = sim_parse(call)
+    pending_orders[chat_id]['sent'] = True
+    keyb = InlineKeyboardMarkup()
+    keyb.add(InlineKeyboardButton('В главное меню', callback_data='c;main_menu'))
+    new_text = 'Ваш заказ отменен'
     bot.edit_message_text(new_text,
                           chat_id,
                           message_id,
